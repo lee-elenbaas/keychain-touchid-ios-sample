@@ -22,6 +22,7 @@
                    [[AAPLTest alloc] initWithName:@"lee - check for passcode" details:@"Set item with passcode then remove it" selector:@selector(checkForPasscode)],
                    [[AAPLTest alloc] initWithName:@"lee - validation flow" details:@"Set item with touchID or passcode then attempt to access it" selector:@selector(userPresenseValidation)],
                    [[AAPLTest alloc] initWithName:@"lee - set item" details:@"Set item with touchID or passcode" selector:@selector(addItemLeeAsync)],
+                   [[AAPLTest alloc] initWithName:@"lee - set item iOS7" details:@"Set item always accessible" selector:@selector(addItemLeeiOS7Async)],
                    [[AAPLTest alloc] initWithName:@"lee - get item" details:@"Get item with touchID or passcode" selector:@selector(copyMatchingLeeAsync)],
                    [[AAPLTest alloc] initWithName:@"lee - delete item" details:@"No authentication" selector:@selector(deleteItemLeeAsync)],
         [[AAPLTest alloc] initWithName:@"Add item" details:@"Using SecItemAdd()" selector:@selector(addItemAsync)],
@@ -194,6 +195,52 @@
     });
 }
 
+- (void)addItemLeeiOS7Async {
+    CFErrorRef error = NULL;
+    
+    SecAccessControlRef sacObject = NULL;
+    if (floor(NSFoundationVersionNumber) > NSFoundationVersionNumber_iOS_7_1)
+    {
+        // Should be the secret invalidated when passcode is removed? If not then use kSecAttrAccessibleWhenUnlocked
+        sacObject = SecAccessControlCreateWithFlags(kCFAllocatorDefault,
+                                                    kSecAttrAccessibleAlways, // iOS4+
+                                                    kSecAccessControlUserPresence, &error);
+
+        if (sacObject == NULL || error != NULL) {
+            NSString *errorString = [NSString stringWithFormat:@"SecItemAdd can't create sacObject: %@", error];
+            
+            self.textView.text = [self.textView.text stringByAppendingString:errorString];
+            
+            return;
+        }
+        
+    }
+    
+    // we want the operation to fail if there is an item which needs authentication so we will use
+    // kSecUseNoAuthenticationUI
+    NSMutableDictionary *attributes = [@{
+                                 (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                                 (__bridge id)kSecAttrService: @"SampleService", // service name
+                                 (__bridge id)kSecAttrAccount: @"SampleValue", // value name
+                                 (__bridge id)kSecValueData: [@"SECRET_PASSWORD_TEXT" dataUsingEncoding:NSUTF8StringEncoding], // value
+                                 } mutableCopy];
+
+    if (floor(NSFoundationVersionNumber) > NSFoundationVersionNumber_iOS_7_1)
+    {
+        [attributes setObject:@YES forKey:(__bridge id)kSecUseNoAuthenticationUI];
+        [attributes setObject:(__bridge_transfer id)sacObject forKey:(__bridge id)kSecAttrAccessControl];
+    }
+
+    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        OSStatus status =  SecItemAdd((__bridge CFDictionaryRef)attributes, nil);
+        
+        NSString *errorString = [self keychainErrorToString:status];
+        NSString *message = [NSString stringWithFormat:@"SecItemAdd status: %@", errorString];
+        
+        [self printMessage:message inTextView:self.textView];
+    });
+}
+
 - (void)addItemLeeAsync {
     CFErrorRef error = NULL;
     
@@ -234,12 +281,17 @@
 }
 
 - (void)copyMatchingLeeAsync {
-    NSDictionary *query = @{
+    NSMutableDictionary *query = [@{
                             (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
                             (__bridge id)kSecAttrService: @"SampleService", // service name
                             (__bridge id)kSecAttrAccount: @"SampleValue", // value name
-                            (__bridge id)kSecUseOperationPrompt: @"Authenticate to access lee's service password"
-                            };
+                            (__bridge id)kSecReturnData: @YES
+                            } mutableCopy];
+
+    if (floor(NSFoundationVersionNumber) > NSFoundationVersionNumber_iOS_7_1)
+    {
+        [query setObject:@"Authenticate to access lee's service password" forKey:(__bridge id)kSecUseOperationPrompt];
+    }
     
     dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         CFTypeRef dataTypeRef = NULL;
@@ -260,6 +312,7 @@
         [self printMessage:message inTextView:self.textView];
     });
 }
+
 
 - (void)deleteItemLeeAsync {
     NSDictionary *query = @{
