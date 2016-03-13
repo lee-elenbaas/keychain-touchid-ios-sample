@@ -19,6 +19,11 @@
     
     // prepare the actions which can be tested in this class
     self.tests = @[
+                   [[AAPLTest alloc] initWithName:@"lee - check for passcode" details:@"Set item with passcode then remove it" selector:@selector(checkForPasscode)],
+                   [[AAPLTest alloc] initWithName:@"lee - validation flow" details:@"Set item with touchID or passcode then attempt to access it" selector:@selector(userPresenseValidation)],
+                   [[AAPLTest alloc] initWithName:@"lee - set item" details:@"Set item with touchID or passcode" selector:@selector(addItemLeeAsync)],
+                   [[AAPLTest alloc] initWithName:@"lee - get item" details:@"Get item with touchID or passcode" selector:@selector(copyMatchingLeeAsync)],
+                   [[AAPLTest alloc] initWithName:@"lee - delete item" details:@"No authentication" selector:@selector(deleteItemLeeAsync)],
         [[AAPLTest alloc] initWithName:@"Add item" details:@"Using SecItemAdd()" selector:@selector(addItemAsync)],
         [[AAPLTest alloc] initWithName:@"Add item (TouchID only)" details:@"Using SecItemAdd()" selector:@selector(addTouchIDItemAsync)],
         [[AAPLTest alloc] initWithName:@"Add item (TouchID and password)" details:@"Using SecItemAdd()" selector:@selector(addPwdItem)],
@@ -46,13 +51,195 @@
 
 #pragma mark - Tests
 
-- (void)copyMatchingAsync {
+- (void)checkForPasscode {
+    CFErrorRef error = NULL;
+
+    if (floor(NSFoundationVersionNumber) <= NSFoundationVersionNumber_iOS_7_1)
+    {
+        NSString *errorString = @"iOS < 8 no touchID and no way to check passcode presence";
+        
+        [self printMessage:errorString inTextView:self.textView];
+        return;
+    }
+    
+    // Should be the secret invalidated when passcode is removed? If not then use kSecAttrAccessibleWhenUnlocked
+    SecAccessControlRef sacObject = SecAccessControlCreateWithFlags(
+                                                                    kCFAllocatorDefault,
+                                                                    kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+                                                                    kSecAccessControlUserPresence, // doesn't really matter
+                                                                    &error
+                                                                    );
+    
+    if (sacObject == NULL || error != NULL) {
+        NSString *errorString = [NSString stringWithFormat:@"SecItemAdd can't create sacObject: %@", error];
+        
+        self.textView.text = [self.textView.text stringByAppendingString:errorString];
+        
+        return;
+    }
+    NSString *serviceName = @"SampleService";
+    NSString *testAttribute = @"PasscodeTest";
+    
+    // we want the operation to fail if there is an item which needs authentication so we will use
+    // kSecUseNoAuthenticationUI
+    NSDictionary *attributes = @{
+                                 (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                                 (__bridge id)kSecAttrService: serviceName, // service name
+                                 (__bridge id)kSecAttrAccount: testAttribute, // value name
+                                 (__bridge id)kSecValueData: [@"SECRET_PASSWORD_TEXT" dataUsingEncoding:NSUTF8StringEncoding], // value does not matter
+                                 (__bridge id)kSecUseOperationPrompt: @"Authenticate to access lee's service password",
+                                 (__bridge id)kSecUseNoAuthenticationUI: @YES,
+                                 (__bridge id)kSecAttrAccessControl: (__bridge_transfer id)sacObject
+                                 };
+    
+    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        OSStatus status =  SecItemAdd((__bridge CFDictionaryRef)attributes, nil);
+        
+        NSString *errorString = [self keychainErrorToString:status];
+        NSString *message = [NSString stringWithFormat:@"SecItemAdd status: %@", errorString];
+        
+        if (errSecSuccess == status) {
+            NSDictionary *deleteQuery = @{
+                                    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                                    (__bridge id)kSecAttrService: serviceName, // service name
+                                    (__bridge id)kSecAttrAccount: testAttribute // value name
+                                    };
+            
+            status = SecItemDelete((__bridge CFDictionaryRef)deleteQuery);
+            
+            errorString = [self keychainErrorToString:status];
+            message = [NSString stringWithFormat:@"SecItemDelete status: %@", errorString];
+            
+        }
+        else if (errSecAuthFailed == status) {
+            message = @"passcode not set on device";
+        }
+        
+        [self printMessage:message inTextView:self.textView];
+    });
+
+
+}
+
+// from https://www.secsign.com/fingerprint-validation-as-an-alternative-to-passcodes/
+- (void)userPresenseValidation {
+    // The identifier and service name together will uniquely identify the keychain entry.
+    NSString * keychainItemIdentifier = @"fingerprintKeychainEntry";
+    NSString * keychainItemServiceName = @"com.secsign.secsign";
+    // The content of the password is not important.
+    NSData * pwData = [@"the password itself does not matter" dataUsingEncoding:NSUTF8StringEncoding];
+    
+    // Set the value ----
+    
+    // Create the keychain entry attributes.
+    NSMutableDictionary	* attributes = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+                                        (__bridge id)(kSecClassGenericPassword), kSecClass,
+                                        keychainItemIdentifier, kSecAttrAccount,
+                                        keychainItemServiceName, kSecAttrService, nil];
+    // Require a fingerprint scan or passcode validation when the keychain entry is read.
+    // Apple also offers an option to destroy the keychain entry if the user ever removes the
+    // passcode from his iPhone, but we don't need that option here.
+    CFErrorRef accessControlError = NULL;
+    SecAccessControlRef accessControlRef = SecAccessControlCreateWithFlags(
+                                                                           kCFAllocatorDefault,
+                                                                           kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                                                                           kSecAccessControlUserPresence,
+                                                                           &accessControlError);
+    if (accessControlRef == NULL || accessControlError != NULL)
+    {
+        NSLog(@"Cannot create SecAccessControlRef to store a password with identifier “%@” in the key chain: %@.", keychainItemIdentifier, accessControlError);
+        return;
+    }
+    attributes[(__bridge id)kSecAttrAccessControl] = (__bridge id)accessControlRef;
+    // In case this code is executed again and the keychain item already exists we want an error code instead of a fingerprint scan.
+    attributes[(__bridge id)kSecUseNoAuthenticationUI] = @YES;
+    attributes[(__bridge id)kSecValueData] = pwData;
+    CFTypeRef result;
+    OSStatus osStatus = SecItemAdd((__bridge CFDictionaryRef)attributes, &result);
+    if (osStatus != noErr)
+    {
+        NSError * error = [[NSError alloc] initWithDomain:NSOSStatusErrorDomain code:osStatus userInfo:nil];
+        NSLog(@"Adding generic password with identifier “%@” to keychain failed with OSError %d: %@.", keychainItemIdentifier, (int)osStatus, error);
+    }
+    
+    /////// accessing the stored value
+    
+    // Determine a string which the device will display in the fingerprint view explaining the reason for the fingerprint scan.
+    NSString * secUseOperationPrompt = @"Authenticate for server login";
+    // The keychain operation shall be performed by the global queue. Otherwise it might just nothing happen.
+    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(void) {
+        // Create the keychain query attributes using the values from the first part of the code.
+        NSMutableDictionary * query = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+                                       (__bridge id)(kSecClassGenericPassword), kSecClass,
+                                       keychainItemIdentifier, kSecAttrAccount,
+                                       keychainItemServiceName, kSecAttrService,
+                                       secUseOperationPrompt, kSecUseOperationPrompt,
+                                       nil];
+        // Start the query and the fingerprint scan and/or device passcode validation
+        CFTypeRef result = nil;
+        OSStatus userPresenceStatus = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+        // Ignore the found content of the key chain entry (the dummy password) and only evaluate the return code.
+        if (noErr == userPresenceStatus)
+        {
+            NSLog(@"Fingerprint or device passcode validated.");
+        }
+        else
+        {
+            NSLog(@"Fingerprint or device passcode could not be validated. Status %d.", (int) userPresenceStatus);
+        }
+        // To process the result at this point there would be a call to delegate method which
+        // would do its work like GUI operations in the main queue. That means it would start
+        // with something like:
+        //   dispatch_async(dispatch_get_main_queue(), ^{
+    });
+}
+
+- (void)addItemLeeAsync {
+    CFErrorRef error = NULL;
+    
+    // Should be the secret invalidated when passcode is removed? If not then use kSecAttrAccessibleWhenUnlocked
+    SecAccessControlRef sacObject = SecAccessControlCreateWithFlags(kCFAllocatorDefault,
+//                                                                    kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, // iOS8+ triggeres touchID or passcode based on settings but user can't choose
+                                                                    kSecAttrAccessibleWhenUnlockedThisDeviceOnly, // iOS4+
+                                                                    kSecAccessControlUserPresence, &error);
+    
+    if (sacObject == NULL || error != NULL) {
+        NSString *errorString = [NSString stringWithFormat:@"SecItemAdd can't create sacObject: %@", error];
+        
+        self.textView.text = [self.textView.text stringByAppendingString:errorString];
+        
+        return;
+    }
+    
+    // we want the operation to fail if there is an item which needs authentication so we will use
+    // kSecUseNoAuthenticationUI
+    NSDictionary *attributes = @{
+                                 (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                                 (__bridge id)kSecAttrService: @"SampleService", // service name
+                                 (__bridge id)kSecAttrAccount: @"SampleValue", // value name
+                                 (__bridge id)kSecValueData: [@"SECRET_PASSWORD_TEXT" dataUsingEncoding:NSUTF8StringEncoding], // value
+                                 (__bridge id)kSecUseOperationPrompt: @"Authenticate to access lee's service password",
+                                 //(__bridge id)kSecUseNoAuthenticationUI: @YES,
+                                 (__bridge id)kSecAttrAccessControl: (__bridge_transfer id)sacObject
+                                 };
+    
+    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        OSStatus status =  SecItemAdd((__bridge CFDictionaryRef)attributes, nil);
+        
+        NSString *errorString = [self keychainErrorToString:status];
+        NSString *message = [NSString stringWithFormat:@"SecItemAdd status: %@", errorString];
+        
+        [self printMessage:message inTextView:self.textView];
+    });
+}
+
+- (void)copyMatchingLeeAsync {
     NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: @"SampleService",
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecUseOperationPrompt: @"Authenticate to access service password",
-    };
+                            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                            (__bridge id)kSecAttrService: @"SampleService", // service name
+                            (__bridge id)kSecAttrAccount: @"SampleValue", // value name
+                            (__bridge id)kSecUseOperationPrompt: @"Authenticate to access lee's service password"
+                            };
     
     dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         CFTypeRef dataTypeRef = NULL;
@@ -61,37 +248,82 @@
         OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)(query), &dataTypeRef);
         if (status == errSecSuccess) {
             NSData *resultData = (__bridge_transfer NSData *)dataTypeRef;
-
+            
             NSString *result = [[NSString alloc] initWithData:resultData encoding:NSUTF8StringEncoding];
-        
+            
             message = [NSString stringWithFormat:@"Result: %@\n", result];
         }
         else {
             message = [NSString stringWithFormat:@"SecItemCopyMatching status: %@", [self keychainErrorToString:status]];
         }
+        
+        [self printMessage:message inTextView:self.textView];
+    });
+}
 
+- (void)deleteItemLeeAsync {
+    NSDictionary *query = @{
+                            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                            (__bridge id)kSecAttrService: @"SampleService", // service name
+                            (__bridge id)kSecAttrAccount: @"SampleValue" // value name
+                            };
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);
+        
+        NSString *errorString = [self keychainErrorToString:status];
+        NSString *message = [NSString stringWithFormat:@"SecItemDelete status: %@", errorString];
+        
+        [super printMessage:message inTextView:self.textView];
+    });
+}
+
+- (void)copyMatchingAsync {
+    NSDictionary *query = @{
+                            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                            (__bridge id)kSecAttrService: @"SampleService",
+                            (__bridge id)kSecReturnData: @YES,
+                            (__bridge id)kSecUseOperationPrompt: @"Authenticate to access service password",
+                            };
+    
+    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        CFTypeRef dataTypeRef = NULL;
+        NSString *message;
+        
+        OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)(query), &dataTypeRef);
+        if (status == errSecSuccess) {
+            NSData *resultData = (__bridge_transfer NSData *)dataTypeRef;
+            
+            NSString *result = [[NSString alloc] initWithData:resultData encoding:NSUTF8StringEncoding];
+            
+            message = [NSString stringWithFormat:@"Result: %@\n", result];
+        }
+        else {
+            message = [NSString stringWithFormat:@"SecItemCopyMatching status: %@", [self keychainErrorToString:status]];
+        }
+        
         [self printMessage:message inTextView:self.textView];
     });
 }
 
 - (void)updateItemAsync {
     NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: @"SampleService",
-        (__bridge id)kSecUseOperationPrompt: @"Authenticate to update your password"
-    };
+                            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                            (__bridge id)kSecAttrService: @"SampleService",
+                            (__bridge id)kSecUseOperationPrompt: @"Authenticate to update your password"
+                            };
     
     NSData *updatedSecretPasswordTextData = [@"UPDATED_SECRET_PASSWORD_TEXT" dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *changes = @{
-        (__bridge id)kSecValueData: updatedSecretPasswordTextData
-    };
+                              (__bridge id)kSecValueData: updatedSecretPasswordTextData
+                              };
     
     dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)changes);
         
         NSString *errorString = [self keychainErrorToString:status];
         NSString *message = [NSString stringWithFormat:@"SecItemUpdate status: %@", errorString];
-
+        
         [super printMessage:message inTextView:self.textView];
     });
 }

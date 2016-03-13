@@ -291,6 +291,7 @@
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
 				GCC_PREFIX_HEADER = KeychainTouchID/Prefix.pch;
 				INFOPLIST_FILE = KeychainTouchID/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 7.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.${PRODUCT_NAME:rfc1034identifier}";
 				PRODUCT_NAME = KeychainTouchID;
@@ -308,6 +309,7 @@
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
 				GCC_PREFIX_HEADER = KeychainTouchID/Prefix.pch;
 				INFOPLIST_FILE = KeychainTouchID/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 7.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.${PRODUCT_NAME:rfc1034identifier}";
 				PRODUCT_NAME = KeychainTouchID;
