@@ -227,7 +227,7 @@
 
     if (floor(NSFoundationVersionNumber) > NSFoundationVersionNumber_iOS_7_1)
     {
-        [attributes setObject:@YES forKey:(__bridge id)kSecUseNoAuthenticationUI];
+        //[attributes setObject:@YES forKey:(__bridge id)kSecUseNoAuthenticationUI];
         [attributes setObject:(__bridge_transfer id)sacObject forKey:(__bridge id)kSecAttrAccessControl];
     }
 
